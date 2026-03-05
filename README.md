@@ -1,1 +1,1 @@
-# cash_register
+# tickets (касса)
