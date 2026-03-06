@@ -30,16 +30,23 @@ services:
       - airport_network
 
   kafka:
-    image: confluentinc/cp-kafka:7.4.0  # используем стабильную версию
+    image: confluentinc/cp-kafka:7.4.0
     container_name: tickets_kafka
     depends_on:
       - zookeeper
     ports:
       - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # ВАЖНО: исправлено для внутренней сети Docker
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -48,11 +55,32 @@ services:
     networks:
       - airport_network
 
+  kafka-init:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: tickets_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Waiting for Kafka to be ready...'
+      sleep 10
+      echo 'Creating topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic flights.events --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic passengers.events --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic board.events --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic tickets.events --partitions 1 --replication-factor 1
+      echo 'Topics created.'
+      "
+    networks:
+      - airport_network
+
   tickets:
     build: .
     container_name: tickets_service
     ports:
-      - "8006:8000"
+      - "8006:8000"  # hostPort: 8006, internalPort: 8000 (соответствует документации, порт изменен)
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -65,7 +93,9 @@ services:
       postgres:
         condition: service_healthy
       kafka:
-        condition: service_started
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - airport_network
     command: >
@@ -77,6 +107,7 @@ services:
 networks:
   airport_network:
     driver: bridge
+    name: airport_network  # фиксированное имя для связи с другими модулями
 
 volumes:
   postgres_data:

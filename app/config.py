@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
     
     # Kafka settings
-    kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_bootstrap_servers: str = "kafka:9092" # В Docker используем имя сервиса, не localhost
     kafka_group_id: str = "ticket-sales-consumer"
     
     # Kafka Topics (из документации)
