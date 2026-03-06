@@ -41,7 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем роутеры
+# Подключаем роутеры - префикс /api/tickets добавляется только в production
 app.include_router(tickets.router, prefix="/api/tickets" if settings.environment == "production" else "")
 app.include_router(sales.router, prefix="/api/tickets" if settings.environment == "production" else "")
 
