@@ -4,7 +4,9 @@ sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 pydantic==2.5.0
 pydantic-settings==2.1.0
-aiokafka==0.8.1
 python-dotenv==1.0.0
 tenacity==8.2.3
-uuid==1.30
+
+# Kafka - исправленные версии
+aiokafka==0.8.1
+kafka-python==2.0.2

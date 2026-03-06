@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine
+# app/database.py
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
@@ -32,11 +33,13 @@ def get_db() -> Session:
     finally:
         db.close()
 
-# Проверка соединения с БД
+# Проверка соединения с БД - ИСПРАВЛЕНО
 def check_database_connection():
     try:
         with engine.connect() as conn:
-            conn.execute("SELECT 1")
+            # Используем text() для raw SQL
+            conn.execute(text("SELECT 1"))
+            conn.commit()
         logger.info("Successfully connected to PostgreSQL")
         return True
     except Exception as e:

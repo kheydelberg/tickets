@@ -5,8 +5,10 @@ from app.models.flight_sales import FlightSales
 from app.models.outbox import OutboxMessage
 from app.models.kafka_models import KafkaEnvelope
 from app.config import settings
+from app.utils.json_encoder import CustomJSONEncoder
 import logging
 import uuid
+import json
 from datetime import datetime
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -48,7 +50,6 @@ class TicketService:
             # F3: проверяем открыты ли продажи
             if not flight_sales.sales_open:
                 logger.info(f"Sales closed for flight {flight_id}, cannot buy ticket")
-                # По документации: можно не создавать билет, пассажир остается без билета
                 return None
             
             # F3: проверяем лимит продаж
@@ -84,25 +85,30 @@ class TicketService:
             flight_sales.active_total += 1
             
             # Создаем outbox сообщение для ticket.bought
-            envelope = KafkaEnvelope(
-                type="ticket.bought",
-                producer="tickets",
-                entity={"kind": "ticket", "id": str(new_ticket.ticket_id)},
-                payload={
+            # ВАЖНО: конвертируем datetime в строку вручную
+            envelope_data = {
+                "eventId": str(uuid.uuid4()),
+                "type": "ticket.bought",
+                "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                "producer": "tickets",
+                "correlationId": None,
+                "entity": {"kind": "ticket", "id": str(new_ticket.ticket_id)},
+                "payload": {
                     "ticketId": str(new_ticket.ticket_id),
                     "passengerId": passenger_id,
+                    "passengerName": passenger_name,
                     "flightId": flight_id,
                     "status": "active",
                     "isVIP": is_vip,
                     "menuType": menu_type,
                     "baggageWeight": baggage_weight
                 }
-            )
+            }
             
             outbox = OutboxMessage(
                 topic=settings.kafka_topic_tickets_events,
                 key=str(new_ticket.ticket_id),
-                value=envelope.dict()
+                value=envelope_data  # Используем dict, а не Pydantic модель
             )
             db.add(outbox)
             
@@ -152,7 +158,7 @@ class TicketService:
                 FlightSales.flight_id == ticket.flight_id
             ).with_for_update().first()
             
-            # F5: проверяем открыты ли продажи (возврат разрешен только до закрытия)
+            # F5: проверяем открыты ли продажи
             if not flight_sales or not flight_sales.sales_open:
                 raise ValueError("Refund is not allowed after sales closed")
             
@@ -164,23 +170,27 @@ class TicketService:
             flight_sales.active_total -= 1
             
             # Создаем outbox сообщение для ticket.refunded
-            envelope = KafkaEnvelope(
-                type="ticket.refunded",
-                producer="tickets",
-                entity={"kind": "ticket", "id": str(ticket.ticket_id)},
-                payload={
+            envelope_data = {
+                "eventId": str(uuid.uuid4()),
+                "type": "ticket.refunded",
+                "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                "producer": "tickets",
+                "correlationId": None,
+                "entity": {"kind": "ticket", "id": str(ticket.ticket_id)},
+                "payload": {
                     "ticketId": str(ticket.ticket_id),
                     "passengerId": str(ticket.passenger_id),
+                    "passengerName": ticket.passenger_name,
                     "flightId": ticket.flight_id,
                     "reason": reason,
                     "oldStatus": old_status.value
                 }
-            )
+            }
             
             outbox = OutboxMessage(
                 topic=settings.kafka_topic_tickets_events,
                 key=str(ticket.ticket_id),
-                value=envelope.dict()
+                value=envelope_data  # Используем dict
             )
             db.add(outbox)
             
@@ -227,28 +237,34 @@ class TicketService:
                 
                 if ticket:
                     # Меняем статус на bumped
+                    old_status = ticket.status
                     ticket.status = TicketStatusEnum.BUMPED
                     
                     # Обновляем счетчики
                     flight_sales.active_total -= 1
                     
                     # Создаем outbox сообщение для ticket.bumped
-                    envelope = KafkaEnvelope(
-                        type="ticket.bumped",
-                        producer="tickets",
-                        entity={"kind": "ticket", "id": str(ticket.ticket_id)},
-                        payload={
+                    envelope_data = {
+                        "eventId": str(uuid.uuid4()),
+                        "type": "ticket.bumped",
+                        "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                        "producer": "tickets",
+                        "correlationId": None,
+                        "entity": {"kind": "ticket", "id": str(ticket.ticket_id)},
+                        "payload": {
                             "ticketId": str(ticket.ticket_id),
                             "passengerId": passenger_id,
+                            "passengerName": ticket.passenger_name,
                             "flightId": flight_id,
-                            "reason": "overbooking"
+                            "reason": "overbooking",
+                            "oldStatus": old_status.value
                         }
-                    )
+                    }
                     
                     outbox = OutboxMessage(
                         topic=settings.kafka_topic_tickets_events,
                         key=str(ticket.ticket_id),
-                        value=envelope.dict()
+                        value=envelope_data  # Используем dict
                     )
                     db.add(outbox)
                     

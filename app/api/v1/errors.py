@@ -1,7 +1,7 @@
+# app/api/v1/errors.py
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from app.main import app
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 def error_response(code: str, message: str) -> dict:
     return {"code": code, "message": message}
 
-@app.exception_handler(RequestValidationError)
+# Убираем @app.exception_handler и делаем обычные функции
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """400 Validation Error"""
     return JSONResponse(
@@ -18,7 +18,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content=error_response("validation_error", str(exc))
     )
 
-@app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
     """409 Conflict для бизнес-ошибок"""
     error_messages = {
@@ -43,7 +42,6 @@ async def value_error_handler(request: Request, exc: ValueError):
         content=error_response(code, error_str)
     )
 
-@app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """500 Internal Error"""
     logger.error(f"Internal error: {exc}", exc_info=True)
