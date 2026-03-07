@@ -36,13 +36,26 @@ def test_buy_ticket_sold_out(base_url, setup_test_flight):
     limit = flight["plannedCapacity"] + flight["overbookLimit"]
     for i in range(limit):
         cur.execute("""
-            INSERT INTO tickets (ticket_id, passenger_id, passenger_name, flight_id, status, created_at)
-            VALUES (%s::uuid, %s::uuid, %s, %s, %s, NOW())
-        """, (str(uuid.uuid4()), str(uuid.uuid4()), f"Passenger {i}", flight["flightId"], "ACTIVE"))
+            INSERT INTO tickets (
+                ticket_id, passenger_id, passenger_name, flight_id, status, 
+                is_vip, baggage_weight, created_at, updated_at
+            ) VALUES (
+                %s::uuid, %s::uuid, %s, %s, %s,
+                %s, %s, NOW(), NOW()
+            )
+        """, (
+            str(uuid.uuid4()), 
+            str(uuid.uuid4()), 
+            f"Passenger {i}", 
+            flight["flightId"], 
+            "ACTIVE",
+            False,  # is_vip
+            0       # baggage_weight
+        ))
     
     cur.execute("""
         UPDATE flight_sales 
-        SET sold_total = %s, active_total = %s
+        SET sold_total = %s, active_total = %s, updated_at = NOW()
         WHERE flight_id = %s
     """, (limit, limit, flight["flightId"]))
     conn.commit()
@@ -105,7 +118,7 @@ def test_ticket_not_found(base_url):
         f"{base_url}/v1/tickets/{fake_id}/refund",
         json={"reason": "test"}
     )
-    assert response.status_code == 409
+    assert response.status_code == 404
     error = response.json()
     assert error["code"] == "not_found"
     print("✅ Error: ticket not found works")

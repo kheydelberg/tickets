@@ -79,13 +79,13 @@ def test_f2_close_sales(base_url, setup_test_flight):
         }
     )
     assert response.status_code == 409  # Conflict
-    error = response.json()
-    assert error["code"] == "sales_closed"
+    error_data = response.json()
+    assert error_data["code"] == "sales_closed"  # ✅ правильно
+    assert error_data["message"] == "Sales are closed for this flight"  # ✅ добавить проверку message
     print("✅ F2: Close sales works")
 
 def test_f3_auto_buy_manual():
     """F3: Тест логики авто-покупки (без Kafka)"""
-    # Создаем рейс
     import psycopg2
     flight_id = f"AUTO{str(uuid.uuid4())[:8]}"
     capacity = 50
@@ -100,23 +100,28 @@ def test_f3_auto_buy_manual():
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO flight_sales 
-        (flight_id, planned_capacity, overbook_limit, sold_total, active_total, sales_open, created_at)
-        VALUES (%s, %s, %s, 0, 0, true, NOW())
+        (flight_id, planned_capacity, overbook_limit, sold_total, active_total, sales_open, created_at, updated_at)
+        VALUES (%s, %s, %s, 0, 0, true, NOW(), NOW())
     """, (flight_id, capacity, int(capacity * 0.3)))
     conn.commit()
     
-    # Прямая вставка билета (имитация auto-buy)
+    # Прямая вставка билета (имитация auto-buy) - добавляем ВСЕ поля
     ticket_id = str(uuid.uuid4())
     passenger_id = str(uuid.uuid4())
     cur.execute("""
-        INSERT INTO tickets (ticket_id, passenger_id, passenger_name, flight_id, status, created_at)
-        VALUES (%s::uuid, %s::uuid, %s, %s, %s, NOW())
-    """, (ticket_id, passenger_id, "Auto Passenger", flight_id, "ACTIVE"))
+        INSERT INTO tickets (
+            ticket_id, passenger_id, passenger_name, flight_id, status, 
+            is_vip, baggage_weight, created_at, updated_at
+        ) VALUES (
+            %s::uuid, %s::uuid, %s, %s, %s, 
+            %s, %s, NOW(), NOW()
+        )
+    """, (ticket_id, passenger_id, "Auto Passenger", flight_id, "ACTIVE", False, 0))
     
     # Обновляем счетчики
     cur.execute("""
         UPDATE flight_sales 
-        SET sold_total = sold_total + 1, active_total = active_total + 1
+        SET sold_total = sold_total + 1, active_total = active_total + 1, updated_at = NOW()
         WHERE flight_id = %s
     """, (flight_id,))
     conn.commit()

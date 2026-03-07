@@ -21,8 +21,8 @@ def test_f6_overbooking_manual():
     # Создаем рейс
     cur.execute("""
         INSERT INTO flight_sales 
-        (flight_id, planned_capacity, overbook_limit, sold_total, active_total, sales_open, created_at)
-        VALUES (%s, 100, 30, 0, 0, true, NOW())
+        (flight_id, planned_capacity, overbook_limit, sold_total, active_total, sales_open, created_at, updated_at)
+        VALUES (%s, 100, 30, 0, 0, true, NOW(), NOW())
     """, (flight_id,))
     
     # Создаем несколько активных билетов
@@ -31,14 +31,19 @@ def test_f6_overbooking_manual():
         passenger_id = str(uuid.uuid4())
         ticket_id = str(uuid.uuid4())
         cur.execute("""
-            INSERT INTO tickets (ticket_id, passenger_id, passenger_name, flight_id, status, created_at)
-            VALUES (%s::uuid, %s::uuid, %s, %s, %s, NOW())
-        """, (ticket_id, passenger_id, f"Passenger {i}", flight_id, "ACTIVE"))
+            INSERT INTO tickets (
+                ticket_id, passenger_id, passenger_name, flight_id, status, 
+                is_vip, baggage_weight, created_at, updated_at
+            ) VALUES (
+                %s::uuid, %s::uuid, %s, %s, %s,
+                %s, %s, NOW(), NOW()
+            )
+        """, (ticket_id, passenger_id, f"Passenger {i}", flight_id, "ACTIVE", False, 0))
         bumped_passengers.append(passenger_id)
     
     cur.execute("""
         UPDATE flight_sales 
-        SET sold_total = 3, active_total = 3
+        SET sold_total = 3, active_total = 3, updated_at = NOW()
         WHERE flight_id = %s
     """, (flight_id,))
     conn.commit()
@@ -47,13 +52,13 @@ def test_f6_overbooking_manual():
     for passenger_id in bumped_passengers:
         cur.execute("""
             UPDATE tickets 
-            SET status = 'BUMPED' 
+            SET status = 'BUMPED', updated_at = NOW()
             WHERE passenger_id = %s::uuid AND flight_id = %s
         """, (passenger_id, flight_id))
     
     cur.execute("""
         UPDATE flight_sales 
-        SET active_total = 0
+        SET active_total = 0, updated_at = NOW()
         WHERE flight_id = %s
     """, (flight_id,))
     conn.commit()

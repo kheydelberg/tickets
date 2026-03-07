@@ -3,5 +3,8 @@ pytest==7.4.3
 pytest-html==4.1.1
 requests==2.31.0
 psycopg2-binary==2.9.9
-kafka-python==2.0.2
 six==1.17.0
+pydantic==2.5.0
+
+aiokafka==0.10.0
+kafka-python-ng

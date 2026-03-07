@@ -1,4 +1,3 @@
-# app/api/v1/errors.py
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -6,21 +5,42 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Формат ошибок из документации
+# Функция для создания ответа с ошибкой в формате документации
 def error_response(code: str, message: str) -> dict:
+    """Формат ошибки согласно спецификации OpenAPI"""
     return {"code": code, "message": message}
 
-# Убираем @app.exception_handler и делаем обычные функции
+# Обработчик для 400 Validation Error
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """400 Validation Error"""
+    """400 Validation Error - ошибки валидации входных данных"""
+    errors = exc.errors()
+    if errors and len(errors) > 0:
+        field = errors[0].get('loc', ['unknown'])[-1]
+        msg = errors[0].get('msg', 'Validation error')
+        message = f"{field}: {msg}"
+    else:
+        message = "Validation error"
+    
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
-        content=error_response("validation_error", str(exc))
+        content=error_response("validation_error", message)
     )
 
-async def value_error_handler(request: Request, exc: ValueError):
-    """409 Conflict для бизнес-ошибок"""
-    error_messages = {
+# Обработчик для 404 Not Found
+async def not_found_handler(request: Request, exc: Exception):
+    """404 Not Found"""
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content=error_response("not_found", str(exc) if str(exc) else "Resource not found")
+    )
+
+# Обработчик для 409 Conflict (бизнес-ошибки)
+async def conflict_handler(request: Request, exc: Exception):
+    """409 Conflict для бизнес-ошибок с разными кодами"""
+    error_str = str(exc)
+    
+    # Маппинг сообщений на коды ошибок из спецификации
+    error_mapping = {
         "Sales not initialized": "sales_not_initialized",
         "Sales are closed": "sales_closed",
         "Sales limit reached": "sold_out",
@@ -29,10 +49,11 @@ async def value_error_handler(request: Request, exc: ValueError):
         "Ticket not found": "not_found",
     }
     
-    error_str = str(exc)
+    # По умолчанию - conflict
     code = "conflict"
     
-    for msg, err_code in error_messages.items():
+    # Ищем соответствие
+    for msg, err_code in error_mapping.items():
         if msg in error_str:
             code = err_code
             break
@@ -42,7 +63,8 @@ async def value_error_handler(request: Request, exc: ValueError):
         content=error_response(code, error_str)
     )
 
-async def general_exception_handler(request: Request, exc: Exception):
+# Обработчик для 500 Internal Error
+async def internal_error_handler(request: Request, exc: Exception):
     """500 Internal Error"""
     logger.error(f"Internal error: {exc}", exc_info=True)
     return JSONResponse(

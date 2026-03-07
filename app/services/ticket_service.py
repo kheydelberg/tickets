@@ -3,6 +3,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models.ticket import Ticket, TicketStatusEnum
 from app.models.flight_sales import FlightSales
 from app.models.outbox import OutboxMessage
+from app.models.idempotency import IdempotencyKey  # Добавь эту модель
 from app.models.kafka_models import KafkaEnvelope
 from app.config import settings
 from app.utils.json_encoder import CustomJSONEncoder
@@ -30,15 +31,26 @@ class TicketService:
         idempotency_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        F3/F4: Покупка билета (авто или manual)
-        В транзакции:
-        - проверить sales_open=true
-        - проверить лимит продаж: active_total < planned_capacity + overbook_limit
-        - создать ticket(status=active)
-        - увеличить sold_total, active_total
-        - опубликовать ticket.bought
+        F3/F4: Покупка билета (авто или manual) с поддержкой идемпотентности
         """
         try:
+            # Проверка идемпотентности - если ключ уже использован
+            if idempotency_key:
+                existing_key = db.query(IdempotencyKey).filter(
+                    IdempotencyKey.key == idempotency_key
+                ).first()
+                
+                if existing_key:
+                    # Ключ уже использован - возвращаем существующий билет
+                    logger.info(f"Idempotency key {idempotency_key} already used, returning existing ticket")
+                    ticket_id = existing_key.response_data.get("ticketId")
+                    if ticket_id:
+                        ticket = db.query(Ticket).filter(
+                            Ticket.ticket_id == uuid.UUID(ticket_id)
+                        ).first()
+                        if ticket:
+                            return ticket.to_dict()
+            
             # Блокируем запись о рейсе
             flight_sales = db.query(FlightSales).filter(
                 FlightSales.flight_id == flight_id
@@ -50,12 +62,12 @@ class TicketService:
             # F3: проверяем открыты ли продажи
             if not flight_sales.sales_open:
                 logger.info(f"Sales closed for flight {flight_id}, cannot buy ticket")
-                return None
+                raise ValueError("Sales are closed for this flight")
             
             # F3: проверяем лимит продаж
             if flight_sales.active_total >= flight_sales.total_limit:
                 logger.info(f"Sales limit reached for flight {flight_id}")
-                return None
+                raise ValueError("Sales limit reached (including overbooking limit)")
             
             # Проверяем, нет ли уже активного билета
             existing = db.query(Ticket).filter(
@@ -67,16 +79,18 @@ class TicketService:
             if existing:
                 raise ValueError("Passenger already has active ticket for this flight")
             
-            # Создаем билет
+            # Создаем билет с ВСЕМИ полями
             new_ticket = Ticket(
                 ticket_id=uuid.uuid4(),
                 passenger_id=uuid.UUID(passenger_id),
                 passenger_name=passenger_name,
                 flight_id=flight_id,
                 status=TicketStatusEnum.ACTIVE,
-                is_vip=is_vip,
+                is_vip=is_vip,  # Обязательное поле
                 menu_type=menu_type,
-                baggage_weight=baggage_weight
+                baggage_weight=baggage_weight,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
             )
             db.add(new_ticket)
             
@@ -84,12 +98,20 @@ class TicketService:
             flight_sales.sold_total += 1
             flight_sales.active_total += 1
             
-            # Создаем outbox сообщение для ticket.bought
-            # ВАЖНО: конвертируем datetime в строку вручную
+            # Сохраняем ключ идемпотентности если есть
+            if idempotency_key:
+                idempotency_record = IdempotencyKey(
+                    key=idempotency_key,
+                    response_data={"ticketId": str(new_ticket.ticket_id)},
+                    created_at=datetime.utcnow()
+                )
+                db.add(idempotency_record)
+            
+            # Создаем outbox сообщение
             envelope_data = {
                 "eventId": str(uuid.uuid4()),
                 "type": "ticket.bought",
-                "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                "ts": datetime.utcnow().isoformat(),
                 "producer": "tickets",
                 "correlationId": None,
                 "entity": {"kind": "ticket", "id": str(new_ticket.ticket_id)},
@@ -108,7 +130,7 @@ class TicketService:
             outbox = OutboxMessage(
                 topic=settings.kafka_topic_tickets_events,
                 key=str(new_ticket.ticket_id),
-                value=envelope_data  # Используем dict, а не Pydantic модель
+                value=envelope_data
             )
             db.add(outbox)
             
@@ -131,17 +153,29 @@ class TicketService:
     def refund_ticket(
         db: Session,
         ticket_id: str,
-        reason: str
+        reason: str,
+        idempotency_key: Optional[str] = None  # Добавлен параметр
     ) -> Dict[str, Any]:
         """
-        F5: Возврат билета
-        - разрешаем только если ticket active
-        - продажи на рейс ещё открыты (sales_open=true)
-        - ticket.status=returned
-        - active_total--
-        - publish ticket.refunded
+        F5: Возврат билета с поддержкой идемпотентности
         """
         try:
+            # Проверка идемпотентности для возврата
+            if idempotency_key:
+                existing_key = db.query(IdempotencyKey).filter(
+                    IdempotencyKey.key == idempotency_key
+                ).first()
+                
+                if existing_key:
+                    logger.info(f"Idempotency key {idempotency_key} already used for refund")
+                    ticket_id_from_key = existing_key.response_data.get("ticketId")
+                    if ticket_id_from_key:
+                        ticket = db.query(Ticket).filter(
+                            Ticket.ticket_id == uuid.UUID(ticket_id_from_key)
+                        ).first()
+                        if ticket:
+                            return ticket.to_dict()
+            
             # Блокируем билет
             ticket = db.query(Ticket).filter(
                 Ticket.ticket_id == uuid.UUID(ticket_id)
@@ -169,11 +203,20 @@ class TicketService:
             # Обновляем счетчики
             flight_sales.active_total -= 1
             
+            # Сохраняем ключ идемпотентности если есть
+            if idempotency_key:
+                idempotency_record = IdempotencyKey(
+                    key=idempotency_key,
+                    response_data={"ticketId": str(ticket.ticket_id)},
+                    created_at=datetime.utcnow()
+                )
+                db.add(idempotency_record)
+            
             # Создаем outbox сообщение для ticket.refunded
             envelope_data = {
                 "eventId": str(uuid.uuid4()),
                 "type": "ticket.refunded",
-                "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                "ts": datetime.utcnow().isoformat(),
                 "producer": "tickets",
                 "correlationId": None,
                 "entity": {"kind": "ticket", "id": str(ticket.ticket_id)},
@@ -190,7 +233,7 @@ class TicketService:
             outbox = OutboxMessage(
                 topic=settings.kafka_topic_tickets_events,
                 key=str(ticket.ticket_id),
-                value=envelope_data  # Используем dict
+                value=envelope_data
             )
             db.add(outbox)
             
@@ -247,7 +290,7 @@ class TicketService:
                     envelope_data = {
                         "eventId": str(uuid.uuid4()),
                         "type": "ticket.bumped",
-                        "ts": datetime.utcnow().isoformat(),  # Явно конвертируем в строку
+                        "ts": datetime.utcnow().isoformat(),
                         "producer": "tickets",
                         "correlationId": None,
                         "entity": {"kind": "ticket", "id": str(ticket.ticket_id)},
@@ -264,7 +307,7 @@ class TicketService:
                     outbox = OutboxMessage(
                         topic=settings.kafka_topic_tickets_events,
                         key=str(ticket.ticket_id),
-                        value=envelope_data  # Используем dict
+                        value=envelope_data
                     )
                     db.add(outbox)
                     

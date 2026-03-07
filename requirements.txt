@@ -6,8 +6,9 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 tenacity==8.2.3
+requests==2.31.0
 
 # Kafka - исправленные версии
 aiokafka==0.10.0
-kafka-python==2.0.2
-
+kafka-python-ng
+six==1.17.0

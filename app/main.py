@@ -1,13 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text  # НЕ ЗАБУДЬ ЭТОТ ИМПОРТ!
+from sqlalchemy import text
 from app.database import engine, Base, check_database_connection, SessionLocal
 from app.api.v1.endpoints import tickets, sales
 from app.api.v1.errors import (
     validation_exception_handler,
-    value_error_handler,
-    general_exception_handler
+    not_found_handler,
+    conflict_handler,
+    internal_error_handler
 )
 from app.config import settings
 import logging
@@ -20,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создание FastAPI приложения ДО проверки БД
+# Создание FastAPI приложения
 app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
@@ -29,8 +30,9 @@ app = FastAPI(
 
 # Регистрация обработчиков ошибок
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(ValueError, value_error_handler)
-app.add_exception_handler(Exception, general_exception_handler)
+app.add_exception_handler(ValueError, conflict_handler)  # Раскомментировано
+app.add_exception_handler(Exception, internal_error_handler)  # Раскомментировано
+app.add_exception_handler(HTTPException, not_found_handler)  # Добавлено для 404
 
 # CORS middleware
 app.add_middleware(
