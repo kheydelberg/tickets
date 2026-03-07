@@ -28,7 +28,7 @@
 
 ```bash
 # Клонировать репозиторий
-git clone <your-repo>
+git clone https://github.com/kheydelberg/tickets
 cd tickets
 
 # Запустить все контейнеры
